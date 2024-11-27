@@ -1,4 +1,11 @@
 {
+  "name": "dahua_access_logs",
+  "version": "1.0.0",
+  "description": "Log Dahua DSS access control swipes to MySQL",
+  "main": "access_control.js",
+  "scripts": {
+    "start": "node access_control_logs.js"
+  },
   "dependencies": {
     "axios": "^1.7.8",
     "mqtt": "^5.10.3",
