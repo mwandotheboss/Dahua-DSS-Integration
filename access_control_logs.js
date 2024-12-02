@@ -1,13 +1,16 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 const axios = require('axios');
 const crypto = require('crypto-js/md5');
 const https = require('https');
 const mysql = require('mysql2/promise');
 
 // DSS API Configuration
-const DSS_API_BASE = 'https://41.139.152.133:443'; // Base URL without /brms
-const DSS_USERNAME = 'system';
-const DSS_PASSWORD = 'Admin@123';
-const DSS_CLIENT_TYPE = 'NODE_APP';
+const DSS_API_BASE = process.env.DSS_API_BASE;  // Use environment variable
+const DSS_USERNAME = process.env.DSS_USERNAME;  // Use environment variable
+const DSS_PASSWORD = process.env.DSS_PASSWORD;  // Use environment variable
+const DSS_CLIENT_TYPE = process.env.DSS_CLIENT_TYPE;  // Use environment variable
 let token = '';
 let subjectToken = '';
 let realm = '';
@@ -16,10 +19,10 @@ let publicKey = '';
 
 // MySQL Configuration
 const MYSQL_POOL_CONFIG = {
-    host: 'localhost',
-    user: 'root',
-    password: 'Admin@123',
-    database: 'dss_access_logs',
+    host: process.env.MYSQL_HOST,  // Use environment variable
+    user: process.env.MYSQL_USER,  // Use environment variable
+    password: process.env.MYSQL_PASSWORD,  // Use environment variable
+    database: process.env.MYSQL_DATABASE,  // Use environment variable
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -58,7 +61,7 @@ async function authenticate() {
                 'Content-Type': 'application/json;charset=UTF-8',
                 'User-Agent': 'Node.js App',
                 'Referer': `${DSS_API_BASE}/brms`,
-                'Time-Zone': 'Africa/Nairobi',
+                'Time-Zone': process.env.TIME_ZONE,  // Use environment variable
             }
         });
 
@@ -107,7 +110,7 @@ async function authenticate() {
                 'Content-Type': 'application/json;charset=UTF-8',
                 'User-Agent': 'Node.js App',
                 'Referer': `${DSS_API_BASE}/brms`,
-                'Time-Zone': 'Africa/Nairobi',
+                'Time-Zone': process.env.TIME_ZONE,  // Use environment variable
             }
         });
 
@@ -190,6 +193,7 @@ async function fetchAccessLogs() {
 async function compareWithDB(logs) {
     const connection = await mysql.createPool(MYSQL_POOL_CONFIG);
     try {
+        const batch = [];  // Batch array to hold the records
         for (const log of logs) {
             const { id, alarmTime, deviceCode, deviceName, channelId, channelName, alarmTypeId, alarmTypeName, personId, firstName, lastName, captureImageUrl, pointName } = log;
 
@@ -199,28 +203,44 @@ async function compareWithDB(logs) {
                 [id]
             );
 
-            if (rows.length > 0) {
-                logMessage(`Record with ID ${id} already exists in the database.`);
-            } else {
-                // If not, insert it into the database
-                const query = `
-                    INSERT INTO access_logs 
-                    (record_id, alarm_time, device_code, device_name, channel_id, 
-                    channel_name, alarm_type_id, alarm_type_name, person_id, 
-                    first_name, last_name, capture_image_url, point_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `;
-                await connection.execute(query, [
-                    id, new Date(alarmTime * 1000), deviceCode, deviceName, channelId, 
-                    channelName, alarmTypeId, alarmTypeName, personId, firstName, lastName, captureImageUrl, pointName
+            if (rows.length === 0) {
+                // Prepare the record for insertion if not already in the database
+                batch.push([
+                    id, 
+                    new Date(alarmTime * 1000), // Convert Unix timestamp to Date
+                    deviceCode, 
+                    deviceName, 
+                    channelId, 
+                    channelName, 
+                    alarmTypeId, 
+                    alarmTypeName, 
+                    personId, 
+                    firstName, 
+                    lastName, 
+                    captureImageUrl, 
+                    pointName
                 ]);
-                logMessage(`Inserted new record with ID ${id} into database.`);
             }
+        }
+
+        if (batch.length > 0) {
+            // Perform bulk insert if there are records to insert
+            const query = `
+                INSERT INTO access_logs 
+                (record_id, alarm_time, device_code, device_name, channel_id, 
+                channel_name, alarm_type_id, alarm_type_name, person_id, first_name, 
+                last_name, capture_image_url, point_name)
+                VALUES ?
+            `;
+            await connection.query(query, [batch]);
+            logMessage(`Inserted ${batch.length} new records into the database.`);
+        } else {
+            logMessage('No new records to insert.');
         }
     } catch (error) {
         logMessage('Error comparing with DB: ' + error.message);
     } finally {
-        // We no longer need to explicitly release connection as mysql2/promise handles it
+        // No need for connection.release() in mysql2/promise (we use the pool)
     }
 }
 
