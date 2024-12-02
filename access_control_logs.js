@@ -6,17 +6,20 @@ const mysql = require('mysql2/promise');
 // DSS API Configuration
 const DSS_API_BASE = 'https://41.139.152.133:443'; // Base URL without /brms
 const DSS_USERNAME = 'system';
-const DSS_PASSWORD = 'Admin@123'; 
+const DSS_PASSWORD = 'Admin@123';
 const DSS_CLIENT_TYPE = 'NODE_APP';
 let token = '';
 let subjectToken = '';
+let realm = '';
+let randomKey = '';
+let publicKey = '';
 
 // MySQL Configuration
 const MYSQL_POOL_CONFIG = {
     host: 'localhost',
     user: 'root',
     password: 'Admin@123',
-    database: 'access_control',
+    database: 'dss_access_control',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -31,7 +34,7 @@ function logMessage(message) {
 
 // Create an https agent that allows self-signed certificates
 const agent = new https.Agent({
-    rejectUnauthorized: false 
+    rejectUnauthorized: false
 });
 
 // MD5 encryption method
@@ -60,7 +63,7 @@ async function authenticate() {
         });
 
         logMessage('First login successful: realm = ' + firstLogin.data.realm + ', randomKey = ' + firstLogin.data.randomKey);
-        
+
         if (firstLogin.data.realm && firstLogin.data.randomKey && firstLogin.data.publickey) {
             realm = firstLogin.data.realm;
             randomKey = firstLogin.data.randomKey;
@@ -72,20 +75,20 @@ async function authenticate() {
         }
 
         // Step 2: Generate signature (hashing and combining)
-        const temp1 = md5(DSS_PASSWORD); 
+        const temp1 = md5(DSS_PASSWORD);
         logMessage(`MD5 of password: ${temp1}`);
 
-        const temp2 = md5(DSS_USERNAME + temp1); 
+        const temp2 = md5(DSS_USERNAME + temp1);
         logMessage(`Double hash (username + hashed password): ${temp2}`);
 
-        const temp3 = md5(temp2); 
+        const temp3 = md5(temp2);
         logMessage(`MD5 of second hash: ${temp3}`);
 
-        const temp4 = md5(DSS_USERNAME + ":" + realm + ":" + temp3); 
+        const temp4 = md5(DSS_USERNAME + ":" + realm + ":" + temp3);
         logMessage(`Concatenation of username, realm, and temp3: ${temp4}`);
 
-        const signatureString = `${temp4}:${randomKey}`; 
-        const finalSignature = md5(signatureString); 
+        const signatureString = `${temp4}:${randomKey}`;
+        const finalSignature = md5(signatureString);
         logMessage(`Final signature with randomKey: ${finalSignature}`);
 
         const requestData = {
@@ -119,45 +122,108 @@ async function authenticate() {
         }
 
         logMessage(`Token obtained successfully: ${token}`);
-
     } catch (error) {
         logMessage('Authentication failed: ' + error.message);
         throw error;
     }
 }
 
-// Fetch and process access logs every minute
+// Keep the token alive
+async function keepTokenAlive() {
+    try {
+        const keepAlivePayload = {
+            token: token,
+            duration: 30   // Duration for the keep-alive request, in seconds
+        };
+
+        const response = await axios.put(`${DSS_API_BASE}/admin/API/accounts/keepalive`, keepAlivePayload, {
+            headers: {
+                'Accept-Language': 'en',
+                'Content-Type': 'application/json;charset=UTF-8',
+                'X-Subject-Token': token,
+            },
+            httpsAgent: agent
+        });
+
+        logMessage('Token keep-alive successful.');
+    } catch (error) {
+        logMessage('Error keeping token alive: ' + error.message);
+        if (error.response) {
+            logMessage('Error response: ' + JSON.stringify(error.response.data));
+        }
+    }
+}
+
+// Update token
+async function updateToken() {
+    try {
+        const updatePayload = {
+            token: token  // Current token
+        };
+
+        const response = await axios.post(`${DSS_API_BASE}/brms/api/v1.0/accounts/token/update`, updatePayload, {
+            headers: {
+                'X-Subject-Token': token
+            },
+            httpsAgent: agent
+        });
+
+        logMessage('Token updated successfully.');
+        token = response.data.token; // Update the token
+    } catch (error) {
+        logMessage('Error updating token: ' + error.message);
+    }
+}
+
+// Function to fetch access logs
 async function fetchAccessLogs() {
     try {
         const currentTimestamp = Math.floor(Date.now() / 1000);
-        const startTime = currentTimestamp - 60;
-        const endTime = currentTimestamp;
+        const startTime = currentTimestamp - 60;  // Last minute
+        const endTime = currentTimestamp;         // Current time
 
         const payload = {
             page: "1",
             pageSize: "20",
             startTime: startTime.toString(),
             endTime: endTime.toString(),
-            channelIds: [],
-            alarmTypeIds: [],
-            personId: "",
+            channelIds: [],  // Optional channel IDs
+            alarmTypeIds: [],  // Optional alarm types
+            personId: "",  // Optional, add if needed
         };
 
         const response = await axios.post(`${DSS_API_BASE}/obms/api/v1.1/acs/access/record/fetch/page`, payload, {
             headers: {
                 'Accept-Language': 'en',
-                'X-Subject-Token': subjectToken,
+                'X-Subject-Token': token, 
                 'Content-Type': 'application/json;charset=UTF-8',
             },
-            httpsAgent: agent,
+            httpsAgent: agent,  // Use the custom agent to bypass SSL verification
         });
 
-        logMessage('Fetched access logs successfully.');
+        // Log the full response for debugging
+        logMessage('Response from fetchAccessLogs: ' + JSON.stringify(response.data));
 
-        // Insert data into database
-        await insertSwipeRecordToDB(response.data);
+        // Check if the response has the expected structure
+        if (response.data && response.data.pageData) {
+            await insertSwipeRecordToDB(response.data);  // Insert data into the database
+            logMessage('Fetched access logs successfully.');
+        } else {
+            throw new Error('Access logs response structure is not as expected.');
+        }
     } catch (error) {
         logMessage('Error fetching access logs: ' + error.message);
+        if (error.response) {
+            // If we get a 401 error, re-authenticate
+            if (error.response.status === 401) {
+                logMessage('Authentication failed, re-authenticating...');
+                await authenticate();  // Re-authenticate and retry the request
+                await fetchAccessLogs();  // Retry fetching the access logs after re-authentication
+            } else {
+                logMessage('Response from error: ' + JSON.stringify(error.response.data));
+                logMessage('Error status code: ' + error.response.status);
+            }
+        }
     }
 }
 
@@ -184,23 +250,24 @@ async function insertSwipeRecordToDB(record) {
             ]);
         }
 
-        logMessage('Swipe event logged into MySQL database.');
+        logMessage('Swipe event logged into database.');
     } catch (error) {
-        logMessage('Failed to log swipe event: ' + error.message);
+        logMessage('Error inserting swipe event into DB: ' + error.message);
     } finally {
-        await connection.end();
+        connection.release();
     }
 }
 
-// Main function
-async function main() {
-    logMessage('Script started.');
+// Initialize the authentication and start fetching logs
+async function init() {
     try {
-        await authenticate();  // Perform first login, second login to get the token
-        setInterval(fetchAccessLogs, 60000);  // Fetch access logs every minute
+        await authenticate();  // Authenticate first
+        setInterval(keepTokenAlive, 22000);  // Keep token alive every 22 seconds
+        setInterval(updateToken, 1320000);  // Update token every 22 minutes
+        await fetchAccessLogs();  // Fetch access logs initially
     } catch (error) {
-        logMessage('Script terminated with error: ' + error.message);
+        logMessage('Initialization failed: ' + error.message);
     }
 }
 
-main();
+init();
