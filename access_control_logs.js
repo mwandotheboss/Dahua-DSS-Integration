@@ -19,7 +19,7 @@ const MYSQL_POOL_CONFIG = {
     host: 'localhost',
     user: 'root',
     password: 'Admin@123',
-    database: 'dss_access_control',
+    database: 'dss_access_logs',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -128,68 +128,18 @@ async function authenticate() {
     }
 }
 
-// Keep the token alive
-async function keepTokenAlive() {
-    try {
-        const keepAlivePayload = {
-            token: token,
-            duration: 30   // Duration for the keep-alive request, in seconds
-        };
-
-        const response = await axios.put(`${DSS_API_BASE}/admin/API/accounts/keepalive`, keepAlivePayload, {
-            headers: {
-                'Accept-Language': 'en',
-                'Content-Type': 'application/json;charset=UTF-8',
-                'X-Subject-Token': token,
-            },
-            httpsAgent: agent
-        });
-
-        logMessage('Token keep-alive successful.');
-    } catch (error) {
-        logMessage('Error keeping token alive: ' + error.message);
-        if (error.response) {
-            logMessage('Error response: ' + JSON.stringify(error.response.data));
-        }
-    }
-}
-
-// Update token
-async function updateToken() {
-    try {
-        const updatePayload = {
-            token: token  // Current token
-        };
-
-        const response = await axios.post(`${DSS_API_BASE}/brms/api/v1.0/accounts/token/update`, updatePayload, {
-            headers: {
-                'X-Subject-Token': token
-            },
-            httpsAgent: agent
-        });
-
-        logMessage('Token updated successfully.');
-        token = response.data.token; // Update the token
-    } catch (error) {
-        logMessage('Error updating token: ' + error.message);
-    }
-}
-
-// Function to fetch access logs
+// Fetch access logs for the last 24 hours and compare with the database
 async function fetchAccessLogs() {
     try {
         const currentTimestamp = Math.floor(Date.now() / 1000);
-        const startTime = currentTimestamp - 60;  // Last minute
-        const endTime = currentTimestamp;         // Current time
+        const startTime = currentTimestamp - (24 * 60 * 60);  // 24 hours ago
+        const endTime = currentTimestamp;  // Current time
 
         const payload = {
             page: "1",
-            pageSize: "20",
+            pageSize: "100",  // Increase the number of records to fetch
             startTime: startTime.toString(),
             endTime: endTime.toString(),
-            channelIds: [],  // Optional channel IDs
-            alarmTypeIds: [],  // Optional alarm types
-            personId: "",  // Optional, add if needed
         };
 
         const response = await axios.post(`${DSS_API_BASE}/obms/api/v1.1/acs/access/record/fetch/page`, payload, {
@@ -204,11 +154,20 @@ async function fetchAccessLogs() {
         // Log the full response for debugging
         logMessage('Response from fetchAccessLogs: ' + JSON.stringify(response.data));
 
-        // Check if the response has the expected structure
-        if (response.data && response.data.pageData) {
-            await insertSwipeRecordToDB(response.data);  // Insert data into the database
-            logMessage('Fetched access logs successfully.');
+        // Ensure that the structure matches what we expect
+        if (response.data && response.data.data && Array.isArray(response.data.data.pageData)) {
+            // Only use pageData for processing
+            const pageData = response.data.data.pageData;
+
+            if (pageData.length === 0) {
+                logMessage("No access logs found in the last 24 hours.");
+            } else {
+                // Compare with database (add your DB comparison logic here)
+                await compareWithDB(pageData);  // Compare with database
+                logMessage('Fetched and compared access logs successfully.');
+            }
         } else {
+            logMessage('Access logs response structure is not as expected. Response: ' + JSON.stringify(response.data));
             throw new Error('Access logs response structure is not as expected.');
         }
     } catch (error) {
@@ -227,34 +186,41 @@ async function fetchAccessLogs() {
     }
 }
 
-// Insert swipe record data into the MySQL database
-async function insertSwipeRecordToDB(record) {
+// Compare fetched access logs with the database
+async function compareWithDB(logs) {
     const connection = await mysql.createPool(MYSQL_POOL_CONFIG);
     try {
-        const records = record.data.pageData;
-        for (const recordData of records) {
-            const { 
-                id, alarmTime, deviceCode, deviceName, channelId, channelName,
-                alarmTypeId, personId, firstName, lastName, captureImageUrl
-            } = recordData;
+        for (const log of logs) {
+            const { id, alarmTime, deviceCode, deviceName, channelId, channelName, alarmTypeId, alarmTypeName, personId, firstName, lastName, captureImageUrl, pointName } = log;
 
-            const query = `
-                INSERT INTO access_logs 
-                (record_id, alarm_time, device_code, device_name, channel_id, 
-                channel_name, alarm_type_id, person_id, first_name, last_name, capture_image_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `;
-            await connection.execute(query, [
-                id, new Date(alarmTime * 1000), deviceCode, deviceName, channelId, 
-                channelName, alarmTypeId, personId, firstName, lastName, captureImageUrl
-            ]);
+            // Check if the record already exists in the database
+            const [rows] = await connection.execute(
+                'SELECT * FROM access_logs WHERE record_id = ?',
+                [id]
+            );
+
+            if (rows.length > 0) {
+                logMessage(`Record with ID ${id} already exists in the database.`);
+            } else {
+                // If not, insert it into the database
+                const query = `
+                    INSERT INTO access_logs 
+                    (record_id, alarm_time, device_code, device_name, channel_id, 
+                    channel_name, alarm_type_id, alarm_type_name, person_id, 
+                    first_name, last_name, capture_image_url, point_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `;
+                await connection.execute(query, [
+                    id, new Date(alarmTime * 1000), deviceCode, deviceName, channelId, 
+                    channelName, alarmTypeId, alarmTypeName, personId, firstName, lastName, captureImageUrl, pointName
+                ]);
+                logMessage(`Inserted new record with ID ${id} into database.`);
+            }
         }
-
-        logMessage('Swipe event logged into database.');
     } catch (error) {
-        logMessage('Error inserting swipe event into DB: ' + error.message);
+        logMessage('Error comparing with DB: ' + error.message);
     } finally {
-        connection.release();
+        // We no longer need to explicitly release connection as mysql2/promise handles it
     }
 }
 
@@ -262,9 +228,7 @@ async function insertSwipeRecordToDB(record) {
 async function init() {
     try {
         await authenticate();  // Authenticate first
-        setInterval(keepTokenAlive, 22000);  // Keep token alive every 22 seconds
-        setInterval(updateToken, 1320000);  // Update token every 22 minutes
-        await fetchAccessLogs();  // Fetch access logs initially
+        setInterval(fetchAccessLogs, 60000);  // Fetch logs every minute
     } catch (error) {
         logMessage('Initialization failed: ' + error.message);
     }
