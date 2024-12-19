@@ -28,6 +28,9 @@ const MYSQL_POOL_CONFIG = {
     queueLimit: 0
 };
 
+// Create a single pool instance to be used throughout the application
+const pool = mysql.createPool(MYSQL_POOL_CONFIG);
+
 // Utility to log messages to the console
 function logMessage(message) {
     const timestamp = new Date().toISOString();
@@ -191,14 +194,13 @@ async function fetchAccessLogs() {
 
 // Compare fetched access logs with the database
 async function compareWithDB(logs) {
-    const connection = await mysql.createPool(MYSQL_POOL_CONFIG);
     try {
         const batch = [];  // Batch array to hold the records
         for (const log of logs) {
             const { id, alarmTime, deviceCode, deviceName, channelId, channelName, alarmTypeId, alarmTypeName, personId, firstName, lastName, captureImageUrl, pointName } = log;
 
             // Check if the record already exists in the database
-            const [rows] = await connection.execute(
+            const [rows] = await pool.execute(
                 'SELECT * FROM access_logs WHERE record_id = ?',
                 [id]
             );
@@ -232,17 +234,31 @@ async function compareWithDB(logs) {
                 last_name, capture_image_url, point_name)
                 VALUES ?
             `;
-            await connection.query(query, [batch]);
+            await pool.query(query, [batch]);
             logMessage(`Inserted ${batch.length} new records into the database.`);
         } else {
             logMessage('No new records to insert.');
         }
     } catch (error) {
         logMessage('Error comparing with DB: ' + error.message);
-    } finally {
-        // No need for connection.release() in mysql2/promise (we use the pool)
+        throw error; // Re-throw the error to be handled by the caller
     }
 }
+
+// Add a cleanup function for graceful shutdown
+async function cleanup() {
+    try {
+        await pool.end();
+        logMessage('Database pool closed successfully');
+    } catch (error) {
+        logMessage('Error closing database pool: ' + error.message);
+    }
+    process.exit(0);
+}
+
+// Add event listeners for cleanup
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
 
 // Initialize the authentication and start fetching logs
 async function init() {
