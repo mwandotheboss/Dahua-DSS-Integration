@@ -22,11 +22,14 @@ const ORACLE_CONFIG = {
     user: process.env.ORACLE_USER,
     password: process.env.ORACLE_PASSWORD,
     connectString: process.env.ORACLE_CONNECT_STRING,
-    poolMin: 1,
-    poolMax: 10,
-    poolIncrement: 1,
-    poolTimeout: 60,
-    stmtCacheSize: 30
+    poolMin: 5,            // Increased for higher load
+    poolMax: 50,           // Increased for concurrent operations
+    poolIncrement: 5,      // Faster pool scaling
+    poolTimeout: 300,
+    stmtCacheSize: 100,    // Increased for better query caching
+    queueTimeout: 60000,
+    enableStatistics: true,
+    prefetchRows: 1000     // Optimize prefetching for large result sets
 };
 
 // Initialize Oracle connection pool
@@ -71,6 +74,23 @@ async function initializePool() {
             if (connection) {
                 await connection.close();
             }
+        }
+
+        // Add indexes for better query performance
+        try {
+            await connection.execute(`
+                BEGIN
+                    EXECUTE IMMEDIATE 'CREATE INDEX idx_access_logs_alarm_time ON access_logs(alarm_time)';
+                    EXECUTE IMMEDIATE 'CREATE INDEX idx_access_logs_person_id ON access_logs(person_id)';
+                EXCEPTION
+                    WHEN OTHERS THEN
+                        IF SQLCODE = -955 THEN NULL; -- Index already exists
+                        ELSE RAISE;
+                        END IF;
+                END;
+            `);
+        } catch (error) {
+            logMessage('Warning: Index creation failed: ' + error.message);
         }
     } catch (error) {
         logMessage('Failed to initialize Oracle pool: ' + error.message);
@@ -181,47 +201,61 @@ async function authenticate() {
     }
 }
 
-// Fetch access logs for the last 24 hours and compare with the database
+// Add batch size configuration
+const BATCH_CONFIG = {
+    fetchSize: 1000,        // Fetch 1000 records at a time from DSS
+    insertBatchSize: 500,   // Insert 500 records at a time to Oracle
+    maxRetries: 3
+};
+
+// Modify fetchAccessLogs to handle pagination
 async function fetchAccessLogs() {
     try {
         const currentTimestamp = Math.floor(Date.now() / 1000);
-        const startTime = currentTimestamp - (24 * 60 * 60);  // 24 hours ago
-        const endTime = currentTimestamp;  // Current time
+        const startTime = currentTimestamp - (24 * 60 * 60);
+        let page = 1;
+        let hasMoreRecords = true;
+        let totalProcessed = 0;
 
-        const payload = {
-            page: "1",
-            pageSize: "100",  // Increase the number of records to fetch
-            startTime: startTime.toString(),
-            endTime: endTime.toString(),
-        };
+        while (hasMoreRecords) {
+            const payload = {
+                page: page.toString(),
+                pageSize: BATCH_CONFIG.fetchSize.toString(),
+                startTime: startTime.toString(),
+                endTime: currentTimestamp.toString(),
+            };
 
-        const response = await axios.post(`${DSS_API_BASE}/obms/api/v1.1/acs/access/record/fetch/page`, payload, {
-            headers: {
-                'Accept-Language': 'en',
-                'X-Subject-Token': token, 
-                'Content-Type': 'application/json;charset=UTF-8',
-            },
-            httpsAgent: agent,  // Use the custom agent to bypass SSL verification
-        });
+            const response = await axios.post(
+                `${DSS_API_BASE}/obms/api/v1.1/acs/access/record/fetch/page`, 
+                payload,
+                {
+                    headers: {
+                        'Accept-Language': 'en',
+                        'X-Subject-Token': token,
+                        'Content-Type': 'application/json;charset=UTF-8',
+                    },
+                    httpsAgent: agent,
+                }
+            );
 
-        // Log the full response for debugging
-        logMessage('Response from fetchAccessLogs: ' + JSON.stringify(response.data));
-
-        // Ensure that the structure matches what we expect
-        if (response.data && response.data.data && Array.isArray(response.data.data.pageData)) {
-            // Only use pageData for processing
-            const pageData = response.data.data.pageData;
-
-            if (pageData.length === 0) {
-                logMessage("No access logs found in the last 24 hours.");
+            if (response.data?.data?.pageData) {
+                const records = response.data.data.pageData;
+                if (records.length > 0) {
+                    // Process records in smaller batches
+                    for (let i = 0; i < records.length; i += BATCH_CONFIG.insertBatchSize) {
+                        const batch = records.slice(i, i + BATCH_CONFIG.insertBatchSize);
+                        await compareWithDB(batch);
+                        totalProcessed += batch.length;
+                    }
+                    page++;
+                } else {
+                    hasMoreRecords = false;
+                }
             } else {
-                // Compare with database (add your DB comparison logic here)
-                await compareWithDB(pageData);  // Compare with database
-                logMessage('Fetched and compared access logs successfully.');
+                hasMoreRecords = false;
             }
-        } else {
-            logMessage('Access logs response structure is not as expected. Response: ' + JSON.stringify(response.data));
-            throw new Error('Access logs response structure is not as expected.');
+
+            logMessage(`Processed ${totalProcessed} records so far`);
         }
     } catch (error) {
         logMessage('Error fetching access logs: ' + error.message);
@@ -239,65 +273,114 @@ async function fetchAccessLogs() {
     }
 }
 
-// Compare fetched access logs with the database
-async function compareWithDB(logs) {
-    let connection;
-    try {
-        connection = await pool.getConnection();
-        
-        for (const log of logs) {
-            const { id, alarmTime, deviceCode, deviceName, channelId, channelName, 
-                   alarmTypeId, alarmTypeName, personId, firstName, lastName, 
-                   captureImageUrl, pointName } = log;
-
-            // Check if record exists
-            const result = await connection.execute(
-                `SELECT 1 FROM access_logs WHERE record_id = :1`,
-                [id],
-                { outFormat: oracledb.OUT_FORMAT_OBJECT }
-            );
-
-            if (result.rows.length === 0) {
-                // Insert new record
-                await connection.execute(
-                    `INSERT INTO access_logs (
-                        record_id, alarm_time, device_code, device_name, 
-                        channel_id, channel_name, alarm_type_id, alarm_type_name,
-                        person_id, first_name, last_name, capture_image_url, point_name
-                    ) VALUES (
-                        :1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13
-                    )`,
-                    [
-                        id,
-                        new Date(alarmTime * 1000),
-                        deviceCode,
-                        deviceName,
-                        channelId,
-                        channelName,
-                        alarmTypeId,
-                        alarmTypeName,
-                        personId,
-                        firstName,
-                        lastName,
-                        captureImageUrl,
-                        pointName
-                    ]
-                );
-                logMessage(`Inserted new record with ID: ${id}`);
+// Add retry logic for database operations
+async function executeWithRetry(operation, maxRetries = 3) {
+    let lastError;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await operation();
+        } catch (error) {
+            lastError = error;
+            if (error.errorNum === 12514) { // TNS:listener could not resolve service
+                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                continue;
             }
-        }
-    } catch (error) {
-        logMessage('Error comparing with DB: ' + error.message);
-        throw error;
-    } finally {
-        if (connection) {
-            try {
-                await connection.close();
-            } catch (error) {
-                logMessage('Error closing connection: ' + error.message);
-            }
+            throw error; // Throw immediately for other errors
         }
     }
+    throw lastError;
+}
+
+// Modify compareWithDB to handle record checking differently
+async function compareWithDB(logs) {
+    return executeWithRetry(async () => {
+        let connection;
+        try {
+            connection = await pool.getConnection();
+            
+            // Process in chunks to avoid memory issues
+            const chunkSize = 1000;
+            for (let i = 0; i < logs.length; i += chunkSize) {
+                const logsChunk = logs.slice(i, i + chunkSize);
+                
+                // Create a string of bind variables
+                const bindPlaceholders = logsChunk.map((_, index) => `:${index + 1}`).join(',');
+                const recordsToCheck = logsChunk.map(log => log.id);
+
+                const result = await connection.execute(
+                    `SELECT record_id FROM access_logs 
+                     WHERE record_id IN (${bindPlaceholders})`,
+                    recordsToCheck,
+                    { autoCommit: true }
+                );
+
+                const existingRecords = new Set(result.rows.map(row => row[0]));
+
+                // Prepare batch insert for new records
+                const newRecords = logsChunk.filter(log => !existingRecords.has(log.id));
+                
+                if (newRecords.length > 0) {
+                    // Insert records one by one or in smaller batches
+                    const insertBinds = newRecords.map(log => ({
+                        record_id: log.id,
+                        alarm_time: new Date(log.alarmTime * 1000),
+                        device_code: log.deviceCode,
+                        device_name: log.deviceName,
+                        channel_id: log.channelId,
+                        channel_name: log.channelName,
+                        alarm_type_id: log.alarmTypeId,
+                        alarm_type_name: log.alarmTypeName,
+                        person_id: log.personId,
+                        first_name: log.firstName,
+                        last_name: log.lastName,
+                        capture_image_url: log.captureImageUrl,
+                        point_name: log.pointName
+                    }));
+
+                    const insertSql = `
+                        INSERT INTO access_logs (
+                            record_id, alarm_time, device_code, device_name, 
+                            channel_id, channel_name, alarm_type_id, alarm_type_name,
+                            person_id, first_name, last_name, capture_image_url, point_name
+                        ) VALUES (
+                            :record_id, :alarm_time, :device_code, :device_name,
+                            :channel_id, :channel_name, :alarm_type_id, :alarm_type_name,
+                            :person_id, :first_name, :last_name, :capture_image_url, :point_name
+                        )`;
+
+                    const options = {
+                        autoCommit: true,
+                        bindDefs: {
+                            record_id: { type: oracledb.STRING, maxSize: 100 },
+                            alarm_time: { type: oracledb.DATE },
+                            device_code: { type: oracledb.STRING, maxSize: 100 },
+                            device_name: { type: oracledb.STRING, maxSize: 200 },
+                            channel_id: { type: oracledb.STRING, maxSize: 100 },
+                            channel_name: { type: oracledb.STRING, maxSize: 200 },
+                            alarm_type_id: { type: oracledb.STRING, maxSize: 100 },
+                            alarm_type_name: { type: oracledb.STRING, maxSize: 200 },
+                            person_id: { type: oracledb.STRING, maxSize: 100 },
+                            first_name: { type: oracledb.STRING, maxSize: 200 },
+                            last_name: { type: oracledb.STRING, maxSize: 200 },
+                            capture_image_url: { type: oracledb.STRING, maxSize: 500 },
+                            point_name: { type: oracledb.STRING, maxSize: 200 }
+                        }
+                    };
+
+                    await connection.executeMany(insertSql, insertBinds, options);
+                    logMessage(`Batch inserted ${newRecords.length} new records`);
+                }
+            }
+        } finally {
+            if (connection) {
+                try {
+                    await connection.close();
+                } catch (error) {
+                    logMessage('Error closing connection: ' + error.message);
+                }
+            }
+        }
+    });
 }
 
 // Add a cleanup function for graceful shutdown
