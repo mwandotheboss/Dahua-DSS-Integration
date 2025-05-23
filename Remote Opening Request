@@ -1,0 +1,12 @@
+PUT {{baseUrl}}/ipms/api/v1.1/entrance/channel/remote-open/{{channelId}}
+Headers:
+{
+    "Content-Type": "{{contentType}}",
+    "Accept-Language": "en",
+    "X-Subject-Token": "{{token}}"
+}
+Body:
+{
+    "channelId": "your_exit_channel_id",
+    "plateNumber": "ABC123"
+} 

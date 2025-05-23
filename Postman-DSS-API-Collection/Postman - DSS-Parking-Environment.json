@@ -1,0 +1,91 @@
+{
+  "id": "dss-parking-env",
+  "name": "DSS Parking Environment",
+  "values": [
+    {
+      "key": "baseUrl",
+      "value": "https://41.139.152.133",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "username",
+      "value": "system",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "password",
+      "value": "Admin@123",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "clientType",
+      "value": "200",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "contentType",
+      "value": "application/json",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "realm",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "randomKey",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "publicKey",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "signature",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "startTime",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "endTime",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "splitTime",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "splitId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+} 

@@ -1,0 +1,9 @@
+POST {{baseUrl}}/ipms/api/v1.1/entrance/records/capture/page
+Body:
+{
+    "page": 1,
+    "pageSize": 20,
+    "startTime": "{{startTime}}",
+    "endTime": "{{endTime}}",
+    "plateNumber": "ABC123"
+} 

@@ -1,0 +1,1 @@
+GET {{baseUrl}}/ipms/api/v1.1/parking-lot/tree 

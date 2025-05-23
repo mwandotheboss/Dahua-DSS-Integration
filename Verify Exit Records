@@ -1,0 +1,1 @@
+GET {{baseUrl}}/ipms/api/v1.1/vehicle/exit/records/page?page=1&pageSize=20 

@@ -22,4 +22,4 @@ CREATE TABLE access_logs (
 );
 
 -- Create index on record_id to improve search performance
-CREATE INDEX idx_record_id ON access_logs (record_id);
+CREATE INDEX idx_record_id ON access_logs (record_id); 

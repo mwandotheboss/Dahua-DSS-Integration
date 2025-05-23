@@ -1,0 +1,20 @@
+POST {{baseUrl}}/ipms/api/v1.1/vehicle/batch
+Headers:
+{
+    "Content-Type": "{{contentType}}",
+    "Accept-Language": "en",
+    "X-Subject-Token": "{{token}}"
+}
+Body:
+{
+    "vehicles": [
+        {
+            "plateNumber": "ABC123",
+            "plateColor": "1",  // Standard plate color code
+            "vehicleType": "1", // Standard vehicle type
+            "validStartTime": "2024-03-20T00:00:00",
+            "validEndTime": "2024-03-21T00:00:00",
+            "allowExit": true
+        }
+    ]
+} 

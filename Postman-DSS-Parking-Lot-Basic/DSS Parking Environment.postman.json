@@ -1,0 +1,105 @@
+{
+	"id": "4a55f034-c7ba-471e-ae95-7a2da6f61a29",
+	"name": "DSS Parking Environment",
+	"values": [
+		{
+			"key": "baseUrl",
+			"value": "https://41.139.152.133",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "username",
+			"value": "system",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "password",
+			"value": "Admin@123",
+			"type": "secret",
+			"enabled": true
+		},
+		{
+			"key": "clientType",
+			"value": "200",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "contentType",
+			"value": "application/json",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "token",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "realm",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "randomKey",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "publicKey",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "signature",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "startTime",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "endTime",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "splitTime",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "splitId",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "credential",
+			"value": "",
+			"type": "any",
+			"enabled": true
+		},
+		{
+			"key": "nonce",
+			"value": "",
+			"type": "any",
+			"enabled": true
+		}
+	],
+	"_postman_variable_scope": "environment",
+	"_postman_exported_at": "2025-01-14T14:15:22.176Z",
+	"_postman_exported_using": "Postman/11.27.4"
+}

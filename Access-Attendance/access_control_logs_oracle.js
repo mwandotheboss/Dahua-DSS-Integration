@@ -22,14 +22,14 @@ const ORACLE_CONFIG = {
     user: process.env.ORACLE_USER,
     password: process.env.ORACLE_PASSWORD,
     connectString: process.env.ORACLE_CONNECT_STRING,
-    poolMin: 5,            // Increased for higher load
-    poolMax: 50,           // Increased for concurrent operations
-    poolIncrement: 5,      // Faster pool scaling
+    poolMin: 2,                // Reduced minimum connections
+    poolMax: 20,               // Reduced maximum connections
+    poolIncrement: 2,          // Smaller increment
     poolTimeout: 300,
-    stmtCacheSize: 100,    // Increased for better query caching
+    stmtCacheSize: 50,         // Reduced cache size
     queueTimeout: 60000,
     enableStatistics: true,
-    prefetchRows: 1000     // Optimize prefetching for large result sets
+    prefetchRows: 500          // Reduced prefetch size
 };
 
 // Initialize Oracle connection pool
@@ -208,25 +208,101 @@ const BATCH_CONFIG = {
     maxRetries: 3
 };
 
-// Modify fetchAccessLogs to handle pagination
-async function fetchAccessLogs() {
+// Add memory and performance configurations
+const PERFORMANCE_CONFIG = {
+    memory: {
+        maxHeapUsage: 512 * 1024 * 1024,  // Reduced to 512MB max heap (safe for 16GB system)
+        gcThreshold: 0.7                   // Trigger GC earlier at 70% usage
+    },
+    batch: {
+        recentBatchSize: 50,              // Smaller batches for recent records
+        historyBatchSize: 200,            // Reduced historical batch size
+        maxRetries: 3,
+        queryTimeout: 45000               // Increased to 45 seconds for slower network
+    },
+    timeWindows: {
+        recent: 2 * 60 * 60,              // 2 hours in seconds (unchanged)
+        history: 24 * 60 * 60             // 24 hours in seconds (unchanged)
+    },
+    intervals: {
+        recentRecords: 120000,            // Check recent records every 2 minutes
+        historicalRecords: 600000,        // Check historical records every 10 minutes
+        delayBetweenChunks: 200          // 200ms delay between chunks
+    }
+};
+
+// Add memory monitoring
+function checkMemoryUsage() {
+    const used = process.memoryUsage();
+    const heapUsed = used.heapUsed;
+    const heapTotal = used.heapTotal;
+    const usage = heapUsed / PERFORMANCE_CONFIG.memory.maxHeapUsage;
+
+    logMessage(`Memory Usage: ${Math.round(heapUsed / 1024 / 1024)}MB / ${Math.round(heapTotal / 1024 / 1024)}MB`);
+
+    if (usage > PERFORMANCE_CONFIG.memory.gcThreshold) {
+        if (global.gc) {
+            global.gc();
+            logMessage('Garbage collection triggered');
+        }
+        return true; // Memory pressure detected
+    }
+    return false;
+}
+
+// Split fetchAccessLogs into two functions - one for recent and one for historical records
+async function fetchRecentAccessLogs() {
     try {
         const currentTimestamp = Math.floor(Date.now() / 1000);
-        const startTime = currentTimestamp - (24 * 60 * 60);
-        let page = 1;
-        let hasMoreRecords = true;
-        let totalProcessed = 0;
+        const startTime = currentTimestamp - PERFORMANCE_CONFIG.timeWindows.recent;
+        
+        await fetchLogsInTimeWindow(
+            startTime, 
+            currentTimestamp, 
+            PERFORMANCE_CONFIG.batch.recentBatchSize,
+            'recent'
+        );
+    } catch (error) {
+        logMessage('Error fetching recent access logs: ' + error.message);
+        handleFetchError(error);
+    }
+}
 
-        while (hasMoreRecords) {
-            const payload = {
-                page: page.toString(),
-                pageSize: BATCH_CONFIG.fetchSize.toString(),
-                startTime: startTime.toString(),
-                endTime: currentTimestamp.toString(),
-            };
+async function fetchHistoricalAccessLogs() {
+    try {
+        const currentTimestamp = Math.floor(Date.now() / 1000);
+        const startTime = currentTimestamp - PERFORMANCE_CONFIG.timeWindows.history;
+        const recentStartTime = currentTimestamp - PERFORMANCE_CONFIG.timeWindows.recent;
+        
+        await fetchLogsInTimeWindow(
+            startTime, 
+            recentStartTime, 
+            PERFORMANCE_CONFIG.batch.historyBatchSize,
+            'historical'
+        );
+    } catch (error) {
+        logMessage('Error fetching historical access logs: ' + error.message);
+        handleFetchError(error);
+    }
+}
 
+async function fetchLogsInTimeWindow(startTime, endTime, batchSize, type) {
+    let page = 1;
+    let hasMoreRecords = true;
+    let totalProcessed = 0;
+    let memoryPressure = false;
+
+    while (hasMoreRecords && !memoryPressure) {
+        const payload = {
+            page: page.toString(),
+            pageSize: batchSize.toString(),
+            startTime: startTime.toString(),
+            endTime: endTime.toString(),
+        };
+
+        try {
             const response = await axios.post(
-                `${DSS_API_BASE}/obms/api/v1.1/acs/access/record/fetch/page`, 
+                `${DSS_API_BASE}/obms/api/v1.1/acs/access/record/fetch/page`,
                 payload,
                 {
                     headers: {
@@ -235,18 +311,16 @@ async function fetchAccessLogs() {
                         'Content-Type': 'application/json;charset=UTF-8',
                     },
                     httpsAgent: agent,
+                    timeout: PERFORMANCE_CONFIG.batch.queryTimeout
                 }
             );
 
             if (response.data?.data?.pageData) {
                 const records = response.data.data.pageData;
                 if (records.length > 0) {
-                    // Process records in smaller batches
-                    for (let i = 0; i < records.length; i += BATCH_CONFIG.insertBatchSize) {
-                        const batch = records.slice(i, i + BATCH_CONFIG.insertBatchSize);
-                        await compareWithDB(batch);
-                        totalProcessed += batch.length;
-                    }
+                    // Process records with memory checks
+                    memoryPressure = await processRecordsBatch(records, type);
+                    totalProcessed += records.length;
                     page++;
                 } else {
                     hasMoreRecords = false;
@@ -255,22 +329,49 @@ async function fetchAccessLogs() {
                 hasMoreRecords = false;
             }
 
-            logMessage(`Processed ${totalProcessed} records so far`);
-        }
-    } catch (error) {
-        logMessage('Error fetching access logs: ' + error.message);
-        if (error.response) {
-            // If we get a 401 error, re-authenticate
-            if (error.response.status === 401) {
-                logMessage('Authentication failed, re-authenticating...');
-                await authenticate();  // Re-authenticate and retry the request
-                await fetchAccessLogs();  // Retry fetching the access logs after re-authentication
-            } else {
-                logMessage('Response from error: ' + JSON.stringify(error.response.data));
-                logMessage('Error status code: ' + error.response.status);
-            }
+            logMessage(`${type} records processed: ${totalProcessed}`);
+        } catch (error) {
+            handleFetchError(error);
+            break;
         }
     }
+}
+
+async function processRecordsBatch(records, type) {
+    const batchStartTime = Date.now();
+    let processed = 0;
+
+    try {
+        const chunkSize = type === 'recent' ? 25 : 50; // Smaller chunks
+        for (let i = 0; i < records.length; i += chunkSize) {
+            // Check both memory and CPU
+            const memoryPressure = checkMemoryUsage();
+            const highCPULoad = checkSystemLoad();
+
+            if (memoryPressure || highCPULoad) {
+                logMessage(`Resource pressure detected: Memory=${memoryPressure}, CPU=${highCPULoad}`);
+                // Add longer delay if system is under pressure
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                continue;
+            }
+
+            const chunk = records.slice(i, i + chunkSize);
+            await compareWithDB(chunk);
+            processed += chunk.length;
+
+            // Always add delay between chunks
+            await new Promise(resolve => 
+                setTimeout(resolve, PERFORMANCE_CONFIG.intervals.delayBetweenChunks)
+            );
+        }
+    } catch (error) {
+        logMessage(`Error processing ${type} batch: ${error.message}`);
+        throw error;
+    }
+
+    const duration = Date.now() - batchStartTime;
+    logMessage(`${type} batch processed ${processed} records in ${duration}ms`);
+    return false;
 }
 
 // Add retry logic for database operations
@@ -400,15 +501,59 @@ async function cleanup() {
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
-// Initialize the authentication and start fetching logs
+// Add CPU monitoring
+function checkSystemLoad() {
+    const cpus = require('os').cpus();
+    const totalLoad = cpus.reduce((acc, cpu) => acc + (cpu.times.user + cpu.times.system), 0);
+    const totalIdle = cpus.reduce((acc, cpu) => acc + cpu.times.idle, 0);
+    const cpuUsage = (totalLoad / (totalLoad + totalIdle)) * 100;
+    
+    logMessage(`CPU Usage: ${Math.round(cpuUsage)}%`);
+    return cpuUsage > 80; // Return true if CPU usage is too high
+}
+
+// Modify init function to handle both recent and historical fetches
 async function init() {
     try {
-        await initializePool();  // Initialize Oracle pool
-        await authenticate();    // Authenticate with DSS
-        setInterval(fetchAccessLogs, 60000);  // Fetch logs every minute
+        // Log initial system state
+        logMessage('System Information:');
+        logMessage(`Total Memory: ${Math.round(require('os').totalmem() / 1024 / 1024)}MB`);
+        logMessage(`CPUs: ${require('os').cpus().length}`);
+        
+        await initializePool();
+        await authenticate();
+
+        // Start monitoring intervals with staggered starts
+        setTimeout(() => {
+            setInterval(fetchRecentAccessLogs, PERFORMANCE_CONFIG.intervals.recentRecords);
+        }, 1000);
+
+        setTimeout(() => {
+            setInterval(fetchHistoricalAccessLogs, PERFORMANCE_CONFIG.intervals.historicalRecords);
+        }, 5000);
+
+        // Initial fetch after short delay
+        setTimeout(fetchRecentAccessLogs, 2000);
     } catch (error) {
         logMessage('Initialization failed: ' + error.message);
         await cleanup();
+    }
+}
+
+// Add error handling utility
+function handleFetchError(error) {
+    if (error.response) {
+        if (error.response.status === 401) {
+            logMessage('Authentication failed, re-authenticating...');
+            authenticate().catch(authError => {
+                logMessage('Re-authentication failed: ' + authError.message);
+            });
+        } else {
+            logMessage('Response error: ' + JSON.stringify(error.response.data));
+            logMessage('Error status code: ' + error.response.status);
+        }
+    } else {
+        logMessage('Request error: ' + error.message);
     }
 }
 

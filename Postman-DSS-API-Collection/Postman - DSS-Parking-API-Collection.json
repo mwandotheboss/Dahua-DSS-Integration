@@ -1,0 +1,738 @@
+{
+  "info": {
+    "name": "DSS Parking API",
+    "description": "Collection for Dahua DSS Parking Management System API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Get Initial Token",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Generate random nonce",
+                  "const nonce = Math.random().toString(36).substring(7);",
+                  "pm.environment.set('nonce', nonce);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData) {",
+                  "    pm.environment.set('realm', jsonData.realm);",
+                  "    pm.environment.set('randomKey', jsonData.randomKey);",
+                  "    pm.environment.set('publicKey', jsonData.publickey);",
+                  "    console.log('Initial auth response:', JSON.stringify(jsonData, null, 2));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"userName\": \"{{username}}\",\n    \"clientType\": \"{{clientType}}\",\n    \"nonce\": \"{{nonce}}\"\n}"
+            },
+            "url": "{{baseUrl}}/brms/api/v1.0/accounts/authorize"
+          }
+        },
+        {
+          "name": "Authenticate with Signature",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const crypto = require('crypto-js');",
+                  "",
+                  "function md5(val) {",
+                  "    return crypto.MD5(val).toString().toLowerCase();",
+                  "}",
+                  "",
+                  "// Generate new nonce for second request",
+                  "const nonce = Math.random().toString(36).substring(7);",
+                  "pm.environment.set('nonce', nonce);",
+                  "",
+                  "const username = pm.environment.get('username');",
+                  "const password = pm.environment.get('password');",
+                  "const realm = pm.environment.get('realm');",
+                  "const randomKey = pm.environment.get('randomKey');",
+                  "",
+                  "const temp1 = md5(password);",
+                  "const temp2 = md5(username + temp1);",
+                  "const temp3 = md5(temp2);",
+                  "const temp4 = md5(username + ':' + realm + ':' + temp3);",
+                  "const signature = md5(temp4 + ':' + randomKey);",
+                  "",
+                  "pm.environment.set('signature', signature);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.token) {",
+                  "    pm.environment.set('token', jsonData.token);",
+                  "    pm.environment.set('credential', jsonData.credential);",
+                  "    console.log('Token set:', jsonData.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"signature\": \"{{signature}}\",\n    \"userName\": \"{{username}}\",\n    \"randomKey\": \"{{randomKey}}\",\n    \"clientType\": \"{{clientType}}\",\n    \"ipAddress\": \"\",\n    \"nonce\": \"{{nonce}}\"\n}"
+            },
+            "url": "{{baseUrl}}/brms/api/v1.0/accounts/authorize"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Parking Management",
+      "item": [
+        {
+          "name": "Add a Vehicle Entrance and Exit Group",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/entrance-group",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"Entrance Group 1\",\n    \"description\": \"Main entrance group\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Update a Vehicle Entrance and Exit Group",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/entrance-group/{{groupId}}"
+          }
+        },
+        {
+          "name": "Delete a Vehicle Entrance and Exit Group",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/entrance-group/{{groupId}}"
+          }
+        },
+        {
+          "name": "Get the List of Entrance and Exit Groups of Vehicles",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/entrance-group/list"
+          }
+        },
+        {
+          "name": "Batch Save Vehicle Information",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/vehicle/batch"
+          }
+        },
+        {
+          "name": "Delete Vehicle Information",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/vehicle/{{vehicleId}}"
+          }
+        },
+        {
+          "name": "Get the List of Vehicles in Pages",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ipms/api/v1.1/vehicle/page?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["ipms", "api", "v1.1", "vehicle", "page"],
+              "query": [
+                {"key": "page", "value": "1"},
+                {"key": "pageSize", "value": "20"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Querying Vehicle Capture Records",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/entrance/records/capture/page",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"page\": 1,\n    \"pageSize\": 20,\n    \"startTime\": \"{{startTime}}\",\n    \"endTime\": \"{{endTime}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get the Records of Entering Vehicles at the Entrance and Exit in Pages",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ipms/api/v1.1/vehicle/entrance/records/page?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["ipms", "api", "v1.1", "vehicle", "entrance", "records", "page"],
+              "query": [
+                {"key": "page", "value": "1"},
+                {"key": "pageSize", "value": "20"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get the Record Details of Entering Vehicles at the Entrance and Exit",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/vehicle/entrance/record/{{recordId}}"
+          }
+        },
+        {
+          "name": "Get the Records of Exiting Vehicles at the Entrance and Exit in Pages",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ipms/api/v1.1/vehicle/exit/records/page?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["ipms", "api", "v1.1", "vehicle", "exit", "records", "page"],
+              "query": [
+                {"key": "page", "value": "1"},
+                {"key": "pageSize", "value": "20"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get the Record Details of Exiting Vehicles at the Entrance and Exit",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/vehicle/exit/record/{{recordId}}"
+          }
+        },
+        {
+          "name": "Get the Snapshot Records of Vehicles at the Entrance and Exit in Pages",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/vehicle/snapshot/records/page"
+          }
+        },
+        {
+          "name": "Obtaining the Parking Records at the Vehicle Entrance/Exit by Page",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/vehicle/parking/records/page"
+          }
+        },
+        {
+          "name": "Obtaining the Parking Records at the Vehicle Entrance/Exit in Batches",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/vehicle/parking/records/batch"
+          }
+        },
+        {
+          "name": "Get the Historical Information of the Parking Lot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/parking-lot/history"
+          }
+        },
+        {
+          "name": "Get the real-time information of the parking lot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/parking-lot/realtime"
+          }
+        },
+        {
+          "name": "Get Parking Resource Tree",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/parking-lot/tree"
+          }
+        },
+        {
+          "name": "Add a Parking Lot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/parking-lot"
+          }
+        },
+        {
+          "name": "Update a Parking Lot",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/parking-lot/{{parkingLotId}}"
+          }
+        },
+        {
+          "name": "Batch Delete Parking Lots",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/parking-lot/batch"
+          }
+        },
+        {
+          "name": "Remote Opening",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/entrance/channel/remote-open/{{channelId}}"
+          }
+        },
+        {
+          "name": "Fetch All Car Captures",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/car/captures"
+          }
+        },
+        {
+          "name": "Fetch All Car Captures in Pages",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ipms/api/v1.1/car/captures/page?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["ipms", "api", "v1.1", "car", "captures", "page"],
+              "query": [
+                {"key": "page", "value": "1"},
+                {"key": "pageSize", "value": "20"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get List of Users Subscribed to Parking Spaces",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/parking/subscribers"
+          }
+        },
+        {
+          "name": "Get Time In for Parking Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/parking/summary/time-in"
+          }
+        },
+        {
+          "name": "List of Capture Records",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "{{contentType}}"
+              },
+              {
+                "key": "Accept-Language",
+                "value": "en"
+              },
+              {
+                "key": "X-Subject-Token",
+                "value": "{{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/ipms/api/v1.1/capture/records"
+          }
+        }
+      ]
+    }
+  ]
+} 
